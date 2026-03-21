@@ -9,7 +9,7 @@ distnode_modules/
 .env.local
 build/
 dist/
-venv/
+venv/=
 __pycache__/
 *.pyc
 memory.json
