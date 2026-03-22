@@ -178,7 +178,7 @@ User Answer
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/your-username/ai-career-internship-advisor.git
+git clone https://github.com/pruthvibc/ai-career-internship-advisor.git
 cd ai-career-internship-advisor
 ```
 

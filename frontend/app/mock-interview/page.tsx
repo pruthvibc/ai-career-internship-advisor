@@ -2,8 +2,8 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { 
-  ArrowLeft, Send, BrainCircuit, Square, Mic, MicOff, 
+import {
+  ArrowLeft, Send, BrainCircuit, Square, Mic, MicOff,
   Video, VideoOff, Trophy, XCircle, Loader2, Play, LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -20,12 +20,11 @@ export default function MockInterviewStudio() {
   const [isLoading, setIsLoading]   = useState(false);
   const [messages, setMessages]     = useState<{ role: string; text: string }[]>([]);
   const [qNum, setQNum]             = useState(1);
+  const qNumRef                     = useRef(1); 
   const [examResult, setExamResult] = useState<{ passed: boolean; text: string } | null>(null);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
-  // Session gate — nothing fires until user clicks Start
   const [sessionStarted, setSessionStarted] = useState(false);
-  // Hard lock — set to true when backend returns is_complete:true OR when user exits
   const isCompleteRef = useRef(false);
 
   // Voice states
@@ -39,7 +38,9 @@ export default function MockInterviewStudio() {
   const [isRecording, setIsRecording] = useState(false);
   const videoRef         = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef        = useRef<Blob[]>([]);
+  const chunksRef         = useRef<Blob[]>([]);
+
+  const TOTAL_QUESTIONS = 10;
 
   // ─── CONFETTI ─────────────────────────────────────────────────────────────
   const triggerConfetti = () => {
@@ -70,38 +71,28 @@ export default function MockInterviewStudio() {
 
   // ─── EXIT HANDLER ─────────────────────────────────────────────────────────
   const handleExit = () => {
-    // 1. Set the lock FIRST — this is the critical step.
-    //    Every async callback (utterance.onend, recognition.onresult, onerror)
-    //    checks isCompleteRef before doing anything, so setting this true
-    //    immediately makes all pending callbacks no-ops.
     isCompleteRef.current = true;
 
-    // 2. Kill speech synthesis — cancel() stops current speech AND clears queue
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
 
-    // 3. Kill speech recognition — abort() stops without firing onresult
     try { recognitionRef.current?.abort?.(); } catch (_) {}
     try { recognitionRef.current?.stop?.(); } catch (_) {}
     recognitionRef.current = null;
 
-    // 4. Stop recording if active
     try {
       if (mediaRecorderRef.current?.state === 'recording') {
         mediaRecorderRef.current.stop();
       }
     } catch (_) {}
 
-    // 5. Release camera / mic hardware tracks
     try {
       (videoRef.current?.srcObject as MediaStream)
         ?.getTracks()
         .forEach(t => t.stop());
     } catch (_) {}
 
-    // 6. Navigate — short delay lets speechSynthesis.cancel() fully flush
-    //    before the page unloads (some browsers need this)
     setTimeout(() => window.history.back(), 150);
   };
 
@@ -118,14 +109,12 @@ export default function MockInterviewStudio() {
     setInput('');
     setIsLoading(true);
 
-    let snapshot: { role: string; text: string }[] = [];
-    setMessages(prev => {
-      snapshot = [...prev, { role: 'user', text: userText }];
-      return snapshot;
-    });
+    // FIX: Explicitly build the history including the current answer to send to API
+    const currentHistory = [...messages, { role: 'user', text: userText }];
+    setMessages(currentHistory);
 
     try {
-      const apiHistory = snapshot.map(m => ({
+      const apiHistory = currentHistory.map(m => ({
         role:    m.role === 'ai' ? 'assistant' : 'user',
         content: m.text,
       }));
@@ -142,17 +131,20 @@ export default function MockInterviewStudio() {
 
       const data = await response.json();
 
-      // Guard: if user exited while the request was in-flight, discard response
       if (isCompleteRef.current) return;
 
       setMessages(prev => [...prev, { role: 'ai', text: data.text }]);
-      if (data.q_num) setQNum(data.q_num);
 
-      if (data.is_complete) {
+      const nextQ = qNumRef.current + 1;
+      qNumRef.current = nextQ;
+      setQNum(nextQ);
+
+      if (data.is_complete || nextQ > TOTAL_QUESTIONS) {
         isCompleteRef.current = true;
-        setExamResult({ passed: data.passed, text: data.text });
+        const passed = data.passed ?? true;
+        setExamResult({ passed, text: data.text });
         speak(data.text, false);
-        if (data.passed) triggerConfetti();
+        if (passed) triggerConfetti();
       } else {
         speak(data.text, true);
       }
@@ -161,14 +153,13 @@ export default function MockInterviewStudio() {
     } finally {
       setIsLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoading, topicFromUrl, syllabusFromUrl]);
+  // Added messages to dependency array to prevent stale closures
+  }, [isLoading, topicFromUrl, syllabusFromUrl, messages]);
 
   useEffect(() => { submitAnswerRef.current = submitAnswer; }, [submitAnswer]);
 
   // ─── SPEECH RECOGNITION ───────────────────────────────────────────────────
   const startListeningInternal = useCallback(() => {
-    // Never open mic if exam is done or user exited
     if (isCompleteRef.current) return;
 
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -187,7 +178,6 @@ export default function MockInterviewStudio() {
     recognition.onend   = () => setIsListening(false);
 
     recognition.onresult = (event: any) => {
-      // Guard: discard if exited mid-recognition
       if (isCompleteRef.current) return;
       const transcript = event.results[0][0].transcript;
       setInput(transcript);
@@ -198,14 +188,12 @@ export default function MockInterviewStudio() {
 
     recognition.onerror = (event: any) => {
       setIsListening(false);
-      // Guard: don't retry if exited
       if (event.error === 'no-speech' && !isCompleteRef.current) {
         setTimeout(() => startListeningInternal(), 500);
       }
     };
 
     try { recognition.start(); } catch (_) {}
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ─── SPEAK ────────────────────────────────────────────────────────────────
@@ -222,7 +210,6 @@ export default function MockInterviewStudio() {
 
     utterance.onend = () => {
       setIsSpeaking(false);
-      // Guard: don't open mic if exited while AI was speaking
       if (isCompleteRef.current) return;
       if (autoListen) {
         setTimeout(() => startListeningRef.current(), 350);
@@ -231,10 +218,8 @@ export default function MockInterviewStudio() {
 
     utterance.onerror = () => setIsSpeaking(false);
     window.speechSynthesis.speak(utterance);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── MANUAL MIC TOGGLE ────────────────────────────────────────────────────
   const toggleMic = () => {
     if (isListening) {
       try { recognitionRef.current?.stop(); } catch (_) {}
@@ -244,7 +229,6 @@ export default function MockInterviewStudio() {
     }
   };
 
-  // ─── CAMERA ───────────────────────────────────────────────────────────────
   const toggleCamera = async () => {
     if (isCameraOn) {
       (videoRef.current?.srcObject as MediaStream)?.getTracks().forEach(t => t.stop());
@@ -258,7 +242,6 @@ export default function MockInterviewStudio() {
     }
   };
 
-  // ─── RECORDING ────────────────────────────────────────────────────────────
   const startRecording = () => {
     const stream = videoRef.current?.srcObject as MediaStream;
     if (!stream) return alert('Turn on camera first!');
@@ -268,8 +251,8 @@ export default function MockInterviewStudio() {
     recorder.ondataavailable = e => chunksRef.current.push(e.data);
     recorder.onstop = () => {
       const blob = new Blob(chunksRef.current, { type: 'video/webm' });
-      const a    = document.createElement('a');
-      a.href     = URL.createObjectURL(blob);
+      const a     = document.createElement('a');
+      a.href      = URL.createObjectURL(blob);
       a.download = `exam-session-q${qNum}.webm`;
       a.click();
     };
@@ -281,6 +264,8 @@ export default function MockInterviewStudio() {
   const startAssessment = async () => {
     setSessionStarted(true);
     setIsLoading(true);
+    qNumRef.current = 1;
+    setQNum(1);
     try {
       const response = await fetch('http://127.0.0.1:8000/api/chat', {
         method:  'POST',
@@ -292,6 +277,7 @@ export default function MockInterviewStudio() {
         }),
       });
       const data = await response.json();
+      // Update state so the history actually exists for the first answer
       setMessages([{ role: 'ai', text: data.text }]);
       speak(data.text, true);
     } catch (err) {
@@ -301,25 +287,25 @@ export default function MockInterviewStudio() {
     }
   };
 
-  // ─── FORM SUBMIT ──────────────────────────────────────────────────────────
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     try { recognitionRef.current?.stop(); } catch (_) {}
     await submitAnswer(input);
   };
 
-  // ─── DERIVED UI FLAGS ─────────────────────────────────────────────────────
   const inputDisabled = !sessionStarted || isLoading || !!examResult || isSpeaking;
   const micDisabled   = !sessionStarted || isSpeaking || isLoading || !!examResult;
   const sendDisabled  = !input.trim() || isLoading || isSpeaking || !sessionStarted || !!examResult;
 
-  const statusLabel = !sessionStarted    ? 'Waiting to start...'
+  const displayQ = Math.min(qNum, TOTAL_QUESTIONS);
+  const progress = (displayQ / TOTAL_QUESTIONS) * 100;
+
+  const statusLabel = !sessionStarted     ? 'Waiting to start...'
     : isSpeaking                         ? '🔊 Speaking — listen carefully...'
     : isListening                        ? '🎙️ Listening — answer now...'
     : isLoading                          ? 'Thinking...'
     :                                      'Proctored certification in progress.';
 
-  // ─── RENDER ───────────────────────────────────────────────────────────────
   return (
     <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       <div className="flex-1 flex flex-col min-w-0">
@@ -335,12 +321,13 @@ export default function MockInterviewStudio() {
               <p className="text-xs text-slate-400 font-medium mt-0.5">{topicFromUrl}</p>
               <div className="flex items-center gap-3 mt-1">
                 <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">
-                  {qNum > 10 ? 'Evaluating...' : `Question ${qNum} / 10`}
+                  {qNum > TOTAL_QUESTIONS ? 'Evaluating...' : `Question ${displayQ} / ${TOTAL_QUESTIONS}`}
                 </span>
                 <div className="w-48 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                   <motion.div
                     initial={{ width: 0 }}
-                    animate={{ width: `${(Math.min(qNum, 10) / 10) * 100}%` }}
+                    animate={{ width: `${progress}%` }}
+                    transition={{ type: 'spring', stiffness: 80, damping: 20 }}
                     className="h-full bg-indigo-600 shadow-[0_0_10px_rgba(79,70,229,0.4)]"
                   />
                 </div>
@@ -360,7 +347,6 @@ export default function MockInterviewStudio() {
             <div className="px-4 py-1.5 bg-red-50 text-red-600 rounded-full text-[10px] font-black border border-red-100 uppercase tracking-widest flex items-center gap-2">
               <div className="w-2 h-2 bg-red-600 rounded-full animate-pulse" /> LIVE PROCTORING
             </div>
-            {/* EXIT BUTTON */}
             <button
               onClick={() => sessionStarted && !examResult ? setShowExitConfirm(true) : handleExit()}
               className="px-5 py-2.5 bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-xs font-black hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-all uppercase tracking-widest flex items-center gap-2"
@@ -392,7 +378,7 @@ export default function MockInterviewStudio() {
                     </div>
                     <h2 className="text-2xl font-black text-slate-800 mb-4">Ready to Begin?</h2>
                     <p className="text-slate-500 text-sm mb-8">
-                      This proctored assessment contains 10 technical questions on{' '}
+                      This proctored assessment contains {TOTAL_QUESTIONS} technical questions on{' '}
                       <span className="font-bold text-indigo-600">{topicFromUrl}</span>.
                       Ensure your microphone is enabled and clear.
                     </p>
@@ -420,6 +406,23 @@ export default function MockInterviewStudio() {
                 </div>
                 <h2 className="text-white font-black text-2xl tracking-tight">AI Technical Examiner</h2>
                 <p className="text-slate-400 text-sm mt-2 max-w-xs font-medium">{statusLabel}</p>
+
+                {sessionStarted && !examResult && (
+                  <div className="mt-6 flex items-center gap-2">
+                    {Array.from({ length: TOTAL_QUESTIONS }).map((_, i) => (
+                      <div
+                        key={i}
+                        className={`w-2 h-2 rounded-full transition-all duration-500 ${
+                          i < displayQ - 1
+                            ? 'bg-indigo-400'
+                            : i === displayQ - 1
+                            ? 'bg-emerald-400 scale-125 shadow-[0_0_8px_rgba(52,211,153,0.8)]'
+                            : 'bg-slate-700'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -486,7 +489,7 @@ export default function MockInterviewStudio() {
             </form>
           </div>
 
-          {/* EXIT CONFIRMATION MODAL */}
+          {/* MODALS */}
           <AnimatePresence>
             {showExitConfirm && (
               <motion.div
@@ -505,16 +508,10 @@ export default function MockInterviewStudio() {
                     Your progress will be lost and the session will end. Are you sure you want to leave?
                   </p>
                   <div className="flex flex-col gap-3">
-                    <button
-                      onClick={handleExit}
-                      className="w-full bg-red-600 text-white py-4 rounded-2xl font-black shadow-lg hover:bg-red-700 transition-all uppercase tracking-widest text-xs"
-                    >
+                    <button onClick={handleExit} className="w-full bg-red-600 text-white py-4 rounded-2xl font-black shadow-lg hover:bg-red-700 transition-all uppercase tracking-widest text-xs">
                       Yes, Exit Now
                     </button>
-                    <button
-                      onClick={() => setShowExitConfirm(false)}
-                      className="w-full bg-slate-100 text-slate-600 py-4 rounded-2xl font-black hover:bg-slate-200 transition-all uppercase tracking-widest text-xs"
-                    >
+                    <button onClick={() => setShowExitConfirm(false)} className="w-full bg-slate-100 text-slate-600 py-4 rounded-2xl font-black hover:bg-slate-200 transition-all uppercase tracking-widest text-xs">
                       Continue Assessment
                     </button>
                   </div>
@@ -523,7 +520,6 @@ export default function MockInterviewStudio() {
             )}
           </AnimatePresence>
 
-          {/* EXAM RESULT OVERLAY */}
           <AnimatePresence>
             {examResult && (
               <motion.div
@@ -540,7 +536,7 @@ export default function MockInterviewStudio() {
                         <Trophy className="w-14 h-14 text-amber-500 drop-shadow-md" />
                       </div>
                       <h2 className="text-4xl font-black text-slate-800 mb-3 tracking-tight">Skill Certified!</h2>
-                      <p className="text-slate-500 mb-10 leading-relaxed font-medium italic">"{examResult.text}"</p>
+                      <p className="text-slate-500 mb-4 leading-relaxed font-medium italic">"{examResult.text}"</p>
                       <button onClick={() => window.history.back()} className="w-full bg-indigo-600 text-white py-5 rounded-[1.5rem] font-black shadow-2xl shadow-indigo-100 hover:scale-[1.02] transition-all uppercase tracking-[0.2em] text-xs">
                         Add Verified Badge to Resume
                       </button>
@@ -551,7 +547,7 @@ export default function MockInterviewStudio() {
                         <XCircle className="w-14 h-14 text-red-500 drop-shadow-md" />
                       </div>
                       <h2 className="text-4xl font-black text-slate-800 mb-3 tracking-tight">Unverified Proficiency</h2>
-                      <p className="text-slate-500 mb-10 leading-relaxed font-medium italic">"{examResult.text}"</p>
+                      <p className="text-slate-500 mb-4 leading-relaxed font-medium italic">"{examResult.text}"</p>
                       <button onClick={() => window.location.reload()} className="w-full bg-slate-900 text-white py-5 rounded-[1.5rem] font-black shadow-2xl hover:bg-black transition-all uppercase tracking-[0.2em] text-xs">
                         Review Roadmap & Retry
                       </button>
@@ -571,7 +567,7 @@ export default function MockInterviewStudio() {
             <BrainCircuit size={18} className="text-indigo-600" /> Exam Transcript
           </h2>
           <div className="text-[10px] bg-white px-3 py-1.5 rounded-lg border border-indigo-100 font-black text-indigo-600 shadow-sm">
-            {qNum > 10 ? 'EVAL' : `Q ${qNum} / 10`}
+            {qNum > TOTAL_QUESTIONS ? 'EVAL' : `Q ${displayQ} / ${TOTAL_QUESTIONS}`}
           </div>
         </div>
         <div className="flex-1 p-8 overflow-y-auto space-y-6 scrollbar-hide">

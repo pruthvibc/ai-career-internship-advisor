@@ -136,6 +136,7 @@ export default function ResumeEvolution() {
           <SidebarItem href="/mock-interview" icon={<Mic />} label="Mock Interview Studio" />
           <SidebarItem href="/resume-evolution" icon={<FileText />} label="Resume Evolution" active />
           <SidebarItem href="/skill-gap-analysis" icon={<Target />} label="Skill Gap Analysis" />
+          <SidebarItem href="/job-recommendations" icon={<Briefcase />} label="Job Recommendations" />
         </nav>
 
         {/* Certified skills mini-list */}
