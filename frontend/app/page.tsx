@@ -5,6 +5,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { 
   LayoutDashboard, Mic, FileText, Target, 
+  Briefcase, // <--- Add this line
   CheckCircle2, Loader2, 
   Sparkles, BookOpen, Lightbulb,
   Youtube, GraduationCap, Clock, ExternalLink, LogOut
@@ -160,6 +161,7 @@ export default function CareerCommandCenter() {
           <SidebarItem href="/mock-interview"     icon={<Mic />}            label="Mock Interview Studio" />
           <SidebarItem href="/resume-evolution"   icon={<FileText />}       label="Resume Evolution"      />
           <SidebarItem href="/skill-gap-analysis" icon={<Target />}         label="Skill Gap Analysis"    />
+          <SidebarItem href="/job-recommendations" icon={<Briefcase />} label="Job Recommendations" />
         </nav>
 
         {/* Logout button at bottom of sidebar */}

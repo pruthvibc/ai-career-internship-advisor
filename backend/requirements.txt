@@ -6,3 +6,5 @@ python-dotenv
 pypdf
 reportlab
 pydantic
+PyPDF2
+requests

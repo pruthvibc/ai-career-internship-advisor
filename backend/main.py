@@ -1,6 +1,9 @@
 import os
 import json
 import re
+import io
+import requests
+import PyPDF2
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -27,6 +30,10 @@ if not api_key:
 
 groq_client = Groq(api_key=api_key)
 MEMORY_FILE = "memory.json"
+
+# Job recommendation: in-memory resume store (your logic)
+SERPER_API_KEY = os.environ.get("SERPER_API_KEY")
+USER_RESUME_TEXT = {"content": ""}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. MEMORY HELPERS  (original — untouched)
@@ -149,6 +156,10 @@ class ChatRequest(BaseModel):
     messages: list 
     topic_context: Optional[str] = None
     syllabus: Optional[list] = None   # sub-skills from the roadmap module e.g. ["JavaScript basics", "DOM manipulation"]
+
+class MatchRequest(BaseModel):
+    job_description: str
+    job_title: str
 
 # 3. PDF EXTRACTION
 async def extract_text_from_pdf(file: UploadFile):
@@ -641,6 +652,133 @@ async def generate_resume_pdf(request: Request):
         import traceback
         return {"error": str(e), "trace": traceback.format_exc()}
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB RECOMMENDATION ENDPOINTS  (your logic — merged in, untouched)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/api/upload-resume")
+async def upload_resume(file: UploadFile = File(...)):
+    """
+    Upload a resume PDF for job recommendation.
+    Stores resume text in memory and returns AI-generated skill tags.
+    """
+    try:
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(await file.read()))
+        text = "".join([page.extract_text() for page in pdf_reader.pages])
+        USER_RESUME_TEXT["content"] = text
+
+        summary_prompt = f"Summarize this resume into 5 key technical tags. Commas only. Resume: {text[:2000]}"
+        completion = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": summary_prompt}],
+            model="llama-3.3-70b-versatile",
+        )
+        tags = completion.choices[0].message.content.split(",")
+        return {"status": "success", "tags": [t.strip() for t in tags]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/search-jobs")
+async def search_jobs():
+    """
+    Search for live job listings based on the uploaded resume using Serper API.
+    Requires /api/upload-resume to be called first.
+    """
+    if not USER_RESUME_TEXT["content"]:
+        raise HTTPException(status_code=400, detail="Please upload a resume first.")
+
+    # Generate search query based on resume
+    resume_snippet = USER_RESUME_TEXT["content"][:800]
+    query_prompt = f"Write a 4-word job role title for an internship based on this resume: {resume_snippet}. Return ONLY the job title, nothing else."
+
+    query_completion = groq_client.chat.completions.create(
+        messages=[{"role": "user", "content": query_prompt}],
+        model="llama-3.3-70b-versatile",
+    )
+    search_query = query_completion.choices[0].message.content.strip().replace('"', '')
+    print(f"Generated search query: {search_query}")  # debug log
+
+    # Call Serper Jobs API  (jobs endpoint — not news)
+    url = "https://google.serper.dev/search"
+    payload = json.dumps({
+        "q": f"{search_query} internship Bengaluru site:linkedin.com OR site:naukri.com OR site:internshala.com",
+        "gl": "in",
+        "hl": "en",
+        "num": 10
+    })
+    headers = {'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json'}
+
+    try:
+        response = requests.post(url, headers=headers, data=payload)
+        results = response.json()
+        print(f"Serper raw response keys: {list(results.keys())}")  # debug log
+
+        job_listings = []
+
+        # Serper returns organic results for normal search
+        for item in results.get("organic", [])[:6]:
+            title = item.get("title", "")
+            snippet = item.get("snippet", "")
+            link = item.get("link", "")
+
+            # Extract company name from title or snippet
+            company = ""
+            if " at " in title:
+                company = title.split(" at ")[-1].strip()
+            elif " - " in title:
+                company = title.split(" - ")[-1].strip()
+            else:
+                company = snippet.split(".")[0].strip()
+
+            job_listings.append({
+                "title": title,
+                "company": company,
+                "link": link,
+                "description": snippet
+            })
+
+        if not job_listings:
+            print(f"No jobs found. Full Serper response: {results}")  # debug log
+
+        return {"jobs": job_listings}
+    except Exception as e:
+        print(f"Serper API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+@app.post("/api/match-job")
+async def match_job(request: MatchRequest):
+    """
+    Deep-dive match analysis between the uploaded resume and a specific job description.
+    Returns match percentage, missing skills, improvement advice, and a verdict.
+    """
+    if not USER_RESUME_TEXT["content"]:
+        return {"error": "No resume found."}
+
+    match_prompt = (
+        "You are a Technical Recruiter. Compare Resume vs Job. "
+        "Return ONLY JSON with keys: 'match_percentage' (int), 'missing_skills' (list), "
+        "'improvement_advice' (string), 'verdict' (string)."
+        f"\n\nRESUME: {USER_RESUME_TEXT['content'][:3000]}"
+        f"\n\nJOB: {request.job_description}"
+    )
+
+    try:
+        completion = groq_client.chat.completions.create(
+            messages=[{"role": "system", "content": "Return valid JSON object only."},
+                      {"role": "user", "content": match_prompt}],
+            model="llama-3.3-70b-versatile",
+            response_format={"type": "json_object"}
+        )
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e:
+        return {"error": "Analysis failed"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTH ENDPOINTS  (friend's original — untouched)
+# ─────────────────────────────────────────────────────────────────────────────
 
 class AuthRequest(BaseModel):
     username: str
