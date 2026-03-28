@@ -44,41 +44,62 @@ interface ResumeData {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function ResumeEvolution() {
-  const [resumeFile, setResumeFile] = useState<File | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [resumeData, setResumeData] = useState<ResumeData | null>(null);
+  const [resumeFile, setResumeFile]         = useState<File | null>(null);
+  const [isAnalyzing, setIsAnalyzing]       = useState(false);
+  const [resumeData, setResumeData]         = useState<ResumeData | null>(null);
   const [verifiedSkills, setVerifiedSkills] = useState<string[]>([]);
   const [isGeneratingDocx, setIsGeneratingDocx] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [expandedExp, setExpandedExp] = useState<number | null>(0);
-  const [memories, setMemories] = useState<string[]>([]);
+  const [error, setError]                   = useState<string | null>(null);
+  const [expandedExp, setExpandedExp]       = useState<number | null>(0);
+  const [memories, setMemories]             = useState<string[]>([]);
 
-  // Load memories to show which skills are already certified
+  // ── NEW: read user_id from sessionStorage ──────────────────────────────
+  const [userId, setUserId] = useState<string | null>(null);
+
   useEffect(() => {
-    fetch('http://localhost:8000/api/hindsight')
+    const saved = sessionStorage.getItem('ai_advisor_user');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setUserId(parsed.id || null);
+      } catch {
+        setUserId(null);
+      }
+    }
+  }, []);
+
+  // CHANGED: pass user_id to /api/hindsight to get only THIS user's verified skills
+  useEffect(() => {
+    if (!userId) return;
+    fetch(`http://localhost:8000/api/hindsight?user_id=${encodeURIComponent(userId)}`)
       .then(r => r.json())
       .then(d => setMemories(d.memories || []))
       .catch(() => {});
-  }, []);
+  }, [userId]);
 
   const masteredFromMemory = memories
     .filter(m => m.includes('VERIFIED_MASTERY'))
     .map(m => m.replace('VERIFIED_MASTERY: ', '').trim());
 
-  // ── Step 1: Upload resume & trigger AI analysis ───────────────────────────
+  // CHANGED: pass user_id as FormData field to /api/evolve-resume
   const handleAnalyze = async () => {
     if (!resumeFile) return;
+    if (!userId) {
+      setError('Not logged in. Please sign in again.');
+      return;
+    }
     setIsAnalyzing(true);
     setError(null);
     setResumeData(null);
 
     const formData = new FormData();
     formData.append('resume', resumeFile);
+    formData.append('user_id', userId);       // ← NEW
 
     try {
       const res = await fetch('http://localhost:8000/api/evolve-resume', {
         method: 'POST',
-        body: formData,
+        body:   formData,
       });
       const data = await res.json();
 
@@ -95,24 +116,23 @@ export default function ResumeEvolution() {
     }
   };
 
-  // ── Step 2: Generate and download the PDF ────────────────────────────────
   const handleDownloadDocx = async () => {
     if (!resumeData) return;
     setIsGeneratingDocx(true);
 
     try {
       const res = await fetch('http://localhost:8000/api/generate-resume-docx', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resume_data: resumeData }),
+        body:    JSON.stringify({ resume_data: resumeData }),
       });
 
       if (!res.ok) throw new Error('PDF generation failed');
 
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
       a.download = `${resumeData.candidate_name.replace(/\s+/g, '_')}_Evolved_Resume.pdf`;
       a.click();
       URL.revokeObjectURL(url);
@@ -132,14 +152,14 @@ export default function ResumeEvolution() {
           <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Version 2.4 Live</p>
         </div>
         <nav className="flex-1 space-y-2">
-          <SidebarItem href="/" icon={<LayoutDashboard />} label="Dashboard" />
-          <SidebarItem href="/mock-interview" icon={<Mic />} label="Mock Interview Studio" />
-          <SidebarItem href="/resume-evolution" icon={<FileText />} label="Resume Evolution" active />
-          <SidebarItem href="/skill-gap-analysis" icon={<Target />} label="Skill Gap Analysis" />
-          <SidebarItem href="/job-recommendations" icon={<Briefcase />} label="Job Recommendations" />
+          <SidebarItem href="/"                    icon={<LayoutDashboard />} label="Dashboard"            />
+          <SidebarItem href="/mock-interview"      icon={<Mic />}            label="Mock Interview Studio" />
+          <SidebarItem href="/resume-evolution"    icon={<FileText />}       label="Resume Evolution"      active />
+          <SidebarItem href="/skill-gap-analysis"  icon={<Target />}         label="Skill Gap Analysis"    />
+          <SidebarItem href="/job-recommendations" icon={<Briefcase />}      label="Job Recommendations"   />
         </nav>
 
-        {/* Certified skills mini-list */}
+        {/* Shows only THIS user's verified skills from their record */}
         {masteredFromMemory.length > 0 && (
           <div className="mt-6 p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
             <p className="text-[10px] font-black text-emerald-700 uppercase tracking-widest mb-3 flex items-center gap-1">
@@ -174,8 +194,8 @@ export default function ResumeEvolution() {
               </div>
               <h3 className="text-2xl font-bold mb-2">Upgrade Your Resume Automatically</h3>
               <p className="text-indigo-100 text-sm leading-relaxed max-w-md">
-                Every skill you've been certified in gets professionally written into your resume — 
-                added to your Skills section, backed by bullet points under relevant experience, 
+                Every skill you've been certified in gets professionally written into your resume —
+                added to your Skills section, backed by bullet points under relevant experience,
                 and listed as a verified certification.
               </p>
 
@@ -331,7 +351,7 @@ export default function ResumeEvolution() {
                 </ResumeSection>
               )}
 
-              {/* CERTIFICATIONS — highlighted as the new section */}
+              {/* CERTIFICATIONS */}
               {resumeData.certifications?.length > 0 && (
                 <ResumeSection
                   icon={<Award className="w-5 h-5 text-amber-500" />}

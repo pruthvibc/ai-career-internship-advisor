@@ -3,16 +3,16 @@
 import Link from 'next/link';
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { 
-  LayoutDashboard, Mic, FileText, Target, 
-  Briefcase, // <--- Add this line
-  CheckCircle2, Loader2, 
+import {
+  LayoutDashboard, Mic, FileText, Target,
+  Briefcase,
+  CheckCircle2, Loader2,
   Sparkles, BookOpen, Lightbulb,
   Youtube, GraduationCap, Clock, ExternalLink, LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// ── Platform config — colors and icons per platform ───────────────────────
+// ── Platform config ────────────────────────────────────────────────────────
 const PLATFORM_CONFIG: Record<string, { color: string; bg: string; icon: React.ReactNode }> = {
   YouTube:  { color: 'text-red-600',    bg: 'bg-red-50 border-red-100',       icon: <Youtube className="w-3.5 h-3.5" /> },
   Udemy:    { color: 'text-orange-600', bg: 'bg-orange-50 border-orange-100', icon: <GraduationCap className="w-3.5 h-3.5" /> },
@@ -35,9 +35,11 @@ export default function CareerCommandCenter() {
   const [isGeneratingRoadmap, setIsGeneratingRoadmap] = useState(false);
   const [completedSteps, setCompletedSteps]           = useState<Record<number, boolean>>({});
   const [isReturningUser, setIsReturningUser]         = useState<boolean | null>(null);
-  const [sessionUser, setSessionUser]                 = useState<{ name: string } | null>(null);
 
-  // ── Auth gate: redirect to /login if no session ───────────────────────────
+  // ── NEW: read session user (has both name and id) ──────────────────────
+  const [sessionUser, setSessionUser] = useState<{ name: string; id: string } | null>(null);
+
+  // ── Auth gate ───────────────────────────────────────────────────────────
   useEffect(() => {
     const saved = sessionStorage.getItem('ai_advisor_user');
     if (!saved) {
@@ -45,43 +47,43 @@ export default function CareerCommandCenter() {
       return;
     }
     try {
-      setSessionUser(JSON.parse(saved));
+      const parsed = JSON.parse(saved);
+      setSessionUser(parsed);
     } catch {
       router.replace('/login');
     }
   }, [router]);
 
-  // Derive name — prefer sessionStorage name over memory (works before first upload)
-  const candidateName = sessionUser?.name
-    || memories.find(m => m.includes('CANDIDATE_NAME:'))?.replace('CANDIDATE_NAME:', '').trim()
-    || null;
+  const candidateName = sessionUser?.name || null;
+  // ── NEW: use user_id from session for all API calls ────────────────────
+  const userId = sessionUser?.id || null;
 
-  // Load memories on mount
+  // ── Load this user's data from their own record ────────────────────────
+  // CHANGED: pass user_id to /api/hindsight so we get only THIS user's data
   useEffect(() => {
-    fetch('http://localhost:8000/api/hindsight')
+    if (!userId) return;
+    fetch(`http://localhost:8000/api/hindsight?user_id=${encodeURIComponent(userId)}`)
       .then(res => res.json())
       .then(data => setMemories(data.memories || []))
       .catch(err => console.error("Failed to load memories", err));
-  }, []);
+  }, [userId]);
 
-  // Once we know the candidate name, check if they're a returning user
-  // and restore their roadmap + analysis result from the saved user record
+  // ── Restore roadmap + analysis result from user record ─────────────────
+  // CHANGED: use /api/user/{user_id} instead of /api/check-user?name=...
   useEffect(() => {
-    if (!candidateName) return;
-    fetch(`http://localhost:8000/api/check-user?name=${encodeURIComponent(candidateName)}`)
+    if (!userId) return;
+    fetch(`http://localhost:8000/api/user/${encodeURIComponent(userId)}`)
       .then(res => res.json())
       .then(data => {
         if (data.exists && data.user) {
           const user = data.user;
           setIsReturningUser(!user.is_new);
 
-          // Restore roadmap if one was previously generated
           if (user.roadmap && user.roadmap.length > 0) {
             setRoadmap(user.roadmap);
             setShowRoadmap(true);
           }
 
-          // Restore gap analysis result so the skills_missing badges show
           if (user.gaps && user.gaps.length > 0) {
             setAnalysisResult((prev: any) => prev || {
               skills_missing: user.gaps,
@@ -93,19 +95,23 @@ export default function CareerCommandCenter() {
         }
       })
       .catch(() => setIsReturningUser(false));
-  }, [candidateName]);
+  }, [userId]);
 
+  // ── CHANGED: pass user_id in FormData to /api/analyze-gap ─────────────
   const handleUpload = async () => {
     if (!resumeFile || !jdFile) return alert("Please upload both Resume and JD");
+    if (!userId) return alert("Not logged in");
     setIsAnalyzing(true);
     const formData = new FormData();
     formData.append('resume', resumeFile);
     formData.append('jd', jdFile);
+    formData.append('user_id', userId);           // ← NEW
     try {
       const response = await fetch('http://localhost:8000/api/analyze-gap', { method: 'POST', body: formData });
       const data = await response.json();
       setAnalysisResult(data);
-      const memRes  = await fetch('http://localhost:8000/api/hindsight');
+      // Refresh memories from this user's record
+      const memRes  = await fetch(`http://localhost:8000/api/hindsight?user_id=${encodeURIComponent(userId)}`);
       const memData = await memRes.json();
       setMemories(memData.memories || []);
     } catch (error) {
@@ -115,10 +121,12 @@ export default function CareerCommandCenter() {
     }
   };
 
+  // ── CHANGED: pass user_id as query param to /api/generate-roadmap ──────
   const fetchRoadmap = async () => {
+    if (!userId) return;
     setIsGeneratingRoadmap(true);
     try {
-      const res  = await fetch("http://localhost:8000/api/generate-roadmap");
+      const res  = await fetch(`http://localhost:8000/api/generate-roadmap?user_id=${encodeURIComponent(userId)}`);
       const data = await res.json();
       setRoadmap(data.roadmap || []);
       setShowRoadmap(true);
@@ -132,8 +140,6 @@ export default function CareerCommandCenter() {
   const toggleStep = (index: number) =>
     setCompletedSteps(prev => ({ ...prev, [index]: !prev[index] }));
 
-  // If arriving from skill-gap-analysis with ?showRoadmap=true,
-  // auto-fetch the roadmap and scroll to it once it renders
   useEffect(() => {
     if (searchParams.get('showRoadmap') === 'true') {
       fetchRoadmap().then(() => {
@@ -144,8 +150,12 @@ export default function CareerCommandCenter() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Safely detect new resource object vs old plain string
   const isResourceObject = (r: any) => typeof r === 'object' && r !== null && 'platform' in r;
+
+  // Derive hindsight feed items — now from this user's memories only
+  const masteredFromMemory = memories
+    .filter(m => m.includes('VERIFIED_MASTERY'))
+    .map(m => m.replace('VERIFIED_MASTERY: ', '').trim());
 
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900 font-sans">
@@ -157,14 +167,13 @@ export default function CareerCommandCenter() {
           <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Version 2.4 Live</p>
         </div>
         <nav className="flex-1 space-y-2">
-          <SidebarItem href="/"                   icon={<LayoutDashboard />} label="Dashboard"            active />
-          <SidebarItem href="/mock-interview"     icon={<Mic />}            label="Mock Interview Studio" />
-          <SidebarItem href="/resume-evolution"   icon={<FileText />}       label="Resume Evolution"      />
-          <SidebarItem href="/skill-gap-analysis" icon={<Target />}         label="Skill Gap Analysis"    />
-          <SidebarItem href="/job-recommendations" icon={<Briefcase />} label="Job Recommendations" />
+          <SidebarItem href="/"                    icon={<LayoutDashboard />} label="Dashboard"            active />
+          <SidebarItem href="/mock-interview"      icon={<Mic />}            label="Mock Interview Studio" />
+          <SidebarItem href="/resume-evolution"    icon={<FileText />}       label="Resume Evolution"      />
+          <SidebarItem href="/skill-gap-analysis"  icon={<Target />}         label="Skill Gap Analysis"    />
+          <SidebarItem href="/job-recommendations" icon={<Briefcase />}      label="Job Recommendations"   />
         </nav>
 
-        {/* Logout button at bottom of sidebar */}
         <button
           onClick={() => {
             sessionStorage.removeItem('ai_advisor_user');
@@ -182,12 +191,12 @@ export default function CareerCommandCenter() {
         <header className="mb-8">
           <h2 className="text-3xl font-bold text-gray-800">
             {isReturningUser === null
-              ? 'Career Command Center'                          /* still loading */
+              ? 'Career Command Center'
               : isReturningUser && candidateName
-                ? `Welcome back, ${candidateName}. 👋`          /* returning user */
+                ? `Welcome back, ${candidateName}. 👋`
                 : candidateName
-                  ? `Welcome, ${candidateName}!`                /* new user, name known */
-                  : 'Welcome, new user!'}                       
+                  ? `Welcome, ${candidateName}!`
+                  : 'Welcome!'}
           </h2>
           <p className="text-gray-500 mt-1 text-sm">
             {isReturningUser
@@ -210,12 +219,12 @@ export default function CareerCommandCenter() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="bg-white/10 p-4 rounded-2xl border border-white/10 backdrop-blur-sm">
                   <label className="text-[10px] font-black uppercase opacity-60 mb-2 block">Resume (PDF)</label>
-                  <input type="file" onChange={(e) => setResumeFile(e.target.files?.[0] || null)}
+                  <input type="file" accept=".pdf" onChange={(e) => setResumeFile(e.target.files?.[0] || null)}
                     className="block w-full text-xs text-indigo-100 file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:bg-white file:text-indigo-600 font-bold cursor-pointer" />
                 </div>
                 <div className="bg-white/10 p-4 rounded-2xl border border-white/10 backdrop-blur-sm">
                   <label className="text-[10px] font-black uppercase opacity-60 mb-2 block">Job Description (PDF)</label>
-                  <input type="file" onChange={(e) => setJdFile(e.target.files?.[0] || null)}
+                  <input type="file" accept=".pdf" onChange={(e) => setJdFile(e.target.files?.[0] || null)}
                     className="block w-full text-xs text-indigo-100 file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:bg-white file:text-indigo-600 font-bold cursor-pointer" />
                 </div>
               </div>
@@ -330,18 +339,14 @@ export default function CareerCommandCenter() {
                                 return (
                                   <a key={idx} href={res.url} target="_blank" rel="noopener noreferrer"
                                     className={`flex items-center gap-3 px-4 py-3 rounded-2xl border text-[11px] font-bold shadow-sm hover:shadow-md transition-all group ${cfg.bg}`}>
-                                    {/* Platform badge */}
                                     <span className={`flex items-center gap-1 shrink-0 text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md border ${cfg.color} ${cfg.bg}`}>
                                       {cfg.icon} {res.platform}
                                     </span>
-                                    {/* Course title */}
                                     <span className="text-gray-700 leading-snug flex-1 line-clamp-1">{res.title}</span>
-                                    {/* Arrow */}
                                     <ExternalLink className={`w-3.5 h-3.5 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity ${cfg.color}`} />
                                   </a>
                                 );
                               }
-                              // Fallback: old plain string format
                               return (
                                 <div key={idx} className="bg-white border border-gray-100 px-4 py-3 rounded-2xl text-[11px] font-bold text-gray-700 shadow-sm flex items-center gap-2 hover:bg-slate-50 transition-colors">
                                   <GraduationCap className="w-4 h-4 text-indigo-400" /> {res}
@@ -394,7 +399,7 @@ export default function CareerCommandCenter() {
           )}
         </AnimatePresence>
 
-        {/* HINDSIGHT FEED — full width, grid layout */}
+        {/* HINDSIGHT FEED — now shows only this user's memories */}
         <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
           <h3 className="text-xl font-black mb-6 border-b border-gray-50 pb-4 text-gray-800">Hindsight Feed</h3>
           {memories.length > 0 ? (

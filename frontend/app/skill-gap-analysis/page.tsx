@@ -21,8 +21,8 @@ function getCategory(skill: string) {
 }
 
 function getCriticality(index: number, total: number) {
-  if (index === 0)                     return 'High';
-  if (index < Math.ceil(total / 2))   return 'Medium';
+  if (index === 0)                    return 'High';
+  if (index < Math.ceil(total / 2))  return 'Medium';
   return 'Low';
 }
 
@@ -35,18 +35,35 @@ const CRITICALITY_STYLE: Record<string, string> = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function SkillGapAnalysis() {
-  const [openGaps,    setOpenGaps]    = useState<any[]>([]);
+  const [openGaps,       setOpenGaps]       = useState<any[]>([]);
   const [masteredSkills, setMasteredSkills] = useState<string[]>([]);
-  const [loading,     setLoading]     = useState(true);
+  const [loading,        setLoading]        = useState(true);
+
+  // ── NEW: read user_id from sessionStorage ─────────────────────────────
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
+    const saved = sessionStorage.getItem('ai_advisor_user');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setUserId(parsed.id || null);
+      } catch {
+        setUserId(null);
+      }
+    }
+  }, []);
+
+  // CHANGED: pass user_id to /api/hindsight so we only get THIS user's data
+  useEffect(() => {
+    if (userId === null) return;   // wait until userId is resolved
+
     const fetchData = async () => {
       try {
-        const res  = await fetch('http://localhost:8000/api/hindsight');
+        const res  = await fetch(`http://localhost:8000/api/hindsight?user_id=${encodeURIComponent(userId)}`);
         const data = await res.json();
         const memories: string[] = data.memories || [];
 
-        // ── Read gap and mastery entries from memory.json ─────────────────
         const gapEntries      = memories.filter(m => m.includes('Gap Identified:'));
         const masteredEntries = memories.filter(m => m.includes('VERIFIED_MASTERY:'));
 
@@ -54,7 +71,7 @@ export default function SkillGapAnalysis() {
           m.replace('VERIFIED_MASTERY:', '').trim().toLowerCase()
         );
 
-        // ── Only show gaps that have NOT been verified yet ─────────────────
+        // Only show gaps that have NOT been verified yet
         const pending = gapEntries.filter(entry => {
           const skillName = entry.replace('Gap Identified:', '').trim().toLowerCase();
           return !masteredNames.some(mastered => mastered.includes(skillName) || skillName.includes(mastered));
@@ -82,21 +99,19 @@ export default function SkillGapAnalysis() {
     };
 
     fetchData();
-  }, []);
+  }, [userId]);   // re-run when userId resolves
 
-  // Overall match: each verified skill adds to the score
   const totalSkills  = openGaps.length + masteredSkills.length;
   const overallMatch = totalSkills === 0
     ? 0
     : Math.round((masteredSkills.length / totalSkills) * 100);
 
-  // First unverified gap — used for "Challenge" button
   const firstOpenGap = openGaps[0]?.skill || '';
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col">
 
-      {/* ── Header ────────────────────────────────────────────────────────── */}
+      {/* ── Header ──────────────────────────────────────────────────────── */}
       <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-4">
           <Link href="/" className="p-2 hover:bg-slate-100 rounded-full transition-colors">
@@ -110,20 +125,18 @@ export default function SkillGapAnalysis() {
           </div>
         </div>
 
-        {/* Live match score — based on real memory data */}
         <div className="px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-bold flex items-center gap-2 border border-indigo-100">
           <TrendingUp className="w-4 h-4" />
           Profile Match: {overallMatch}%
         </div>
       </header>
 
-      {/* ── Main ──────────────────────────────────────────────────────────── */}
+      {/* ── Main ────────────────────────────────────────────────────────── */}
       <main className="flex-1 max-w-6xl w-full mx-auto p-8 flex flex-col lg:flex-row gap-8">
 
         {/* LEFT: Open gaps */}
         <div className="flex-1 space-y-6">
 
-          {/* Pending gaps */}
           <div>
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-4">
               <AlertTriangle className="w-5 h-5 text-amber-500" />
@@ -162,7 +175,6 @@ export default function SkillGapAnalysis() {
                           {gap.criticality} Priority
                         </span>
 
-                        {/* Direct "Take Exam" shortcut per gap */}
                         <Link
                           href={`/mock-interview?topic=${encodeURIComponent(gap.skill)}`}
                           className="text-[10px] font-black bg-indigo-600 text-white px-3 py-1.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center gap-1.5 whitespace-nowrap"
@@ -184,7 +196,7 @@ export default function SkillGapAnalysis() {
             )}
           </div>
 
-          {/* Verified skills — shown below the pending gaps */}
+          {/* Verified skills */}
           {masteredSkills.length > 0 && (
             <div>
               <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-4">
@@ -228,7 +240,6 @@ export default function SkillGapAnalysis() {
             </p>
 
             <div className="space-y-3">
-              {/* Goes to dashboard and auto-scrolls to roadmap */}
               <Link
                 href="/?showRoadmap=true"
                 className="w-full bg-white text-indigo-600 font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-50 transition-colors"
@@ -237,7 +248,6 @@ export default function SkillGapAnalysis() {
                 View Training Roadmap
               </Link>
 
-              {/* Challenges the highest-priority open gap directly */}
               {firstOpenGap ? (
                 <Link
                   href={`/mock-interview?topic=${encodeURIComponent(firstOpenGap)}`}
@@ -247,13 +257,10 @@ export default function SkillGapAnalysis() {
                   Challenge Top Gap: {firstOpenGap.length > 20 ? firstOpenGap.slice(0, 20) + '…' : firstOpenGap}
                 </Link>
               ) : (
-                <Link
-                  href="/mock-interview"
-                  className="w-full bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-800 transition-colors border border-indigo-500 opacity-60 pointer-events-none"
-                >
+                <div className="w-full bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 border border-indigo-500 opacity-60 cursor-not-allowed">
                   <Target className="w-4 h-4" />
                   No Pending Gaps
-                </Link>
+                </div>
               )}
             </div>
           </div>
@@ -262,7 +269,6 @@ export default function SkillGapAnalysis() {
           <div className="bg-white p-5 rounded-2xl border border-slate-200 space-y-4">
             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Progress Summary</h4>
 
-            {/* Visual progress bar */}
             <div className="space-y-1">
               <div className="flex justify-between text-xs font-semibold text-slate-600">
                 <span>Profile Match</span>
@@ -289,7 +295,6 @@ export default function SkillGapAnalysis() {
               </div>
             </div>
 
-            {/* AI reasoning — uses real first gap */}
             {openGaps.length > 0 && (
               <p className="text-[11px] text-slate-500 leading-relaxed italic border-t border-slate-100 pt-3">
                 "{openGaps[0].skill} is your highest priority gap. Complete the roadmap module and pass the verification exam to close it."

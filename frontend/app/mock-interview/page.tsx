@@ -10,8 +10,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 
 export default function MockInterviewStudio() {
-  const searchParams = useSearchParams();
-  const topicFromUrl = searchParams.get('topic') || 'Software Engineering';
+  const searchParams  = useSearchParams();
+  const topicFromUrl  = searchParams.get('topic') || 'Software Engineering';
   const syllabusFromUrl = searchParams.get('syllabus')
     ? searchParams.get('syllabus')!.split(',').map(s => s.trim()).filter(Boolean)
     : [];
@@ -20,7 +20,7 @@ export default function MockInterviewStudio() {
   const [isLoading, setIsLoading]   = useState(false);
   const [messages, setMessages]     = useState<{ role: string; text: string }[]>([]);
   const [qNum, setQNum]             = useState(1);
-  const qNumRef                     = useRef(1); 
+  const qNumRef                     = useRef(1);
   const [examResult, setExamResult] = useState<{ passed: boolean; text: string } | null>(null);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
@@ -36,13 +36,28 @@ export default function MockInterviewStudio() {
   // Camera / recording
   const [isCameraOn, setIsCameraOn]   = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const videoRef         = useRef<HTMLVideoElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const videoRef          = useRef<HTMLVideoElement>(null);
+  const mediaRecorderRef  = useRef<MediaRecorder | null>(null);
   const chunksRef         = useRef<Blob[]>([]);
+
+  // ── NEW: read user_id from sessionStorage ────────────────────────────
+  const [userId, setUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem('ai_advisor_user');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setUserId(parsed.id || null);
+      } catch {
+        setUserId(null);
+      }
+    }
+  }, []);
 
   const TOTAL_QUESTIONS = 10;
 
-  // ─── CONFETTI ─────────────────────────────────────────────────────────────
+  // ── CONFETTI ──────────────────────────────────────────────────────────
   const triggerConfetti = () => {
     const duration     = 5 * 1000;
     const animationEnd = Date.now() + duration;
@@ -57,7 +72,7 @@ export default function MockInterviewStudio() {
     }, 250);
   };
 
-  // ─── TTS UNLOCK ───────────────────────────────────────────────────────────
+  // ── TTS UNLOCK ────────────────────────────────────────────────────────
   const unlockTTS = useCallback(() => {
     if (ttsReady) return;
     window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
@@ -69,36 +84,30 @@ export default function MockInterviewStudio() {
     return () => document.removeEventListener('click', unlockTTS);
   }, [unlockTTS]);
 
-  // ─── EXIT HANDLER ─────────────────────────────────────────────────────────
+  // ── EXIT HANDLER ──────────────────────────────────────────────────────
   const handleExit = () => {
     isCompleteRef.current = true;
 
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
-
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     try { recognitionRef.current?.abort?.(); } catch (_) {}
-    try { recognitionRef.current?.stop?.(); } catch (_) {}
+    try { recognitionRef.current?.stop?.();  } catch (_) {}
     recognitionRef.current = null;
 
     try {
-      if (mediaRecorderRef.current?.state === 'recording') {
-        mediaRecorderRef.current.stop();
-      }
+      if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
     } catch (_) {}
 
     try {
-      (videoRef.current?.srcObject as MediaStream)
-        ?.getTracks()
-        .forEach(t => t.stop());
+      (videoRef.current?.srcObject as MediaStream)?.getTracks().forEach(t => t.stop());
     } catch (_) {}
 
     setTimeout(() => window.history.back(), 150);
   };
 
-  // ─── SUBMIT ANSWER ────────────────────────────────────────────────────────
+  // ── SUBMIT ANSWER ─────────────────────────────────────────────────────
   const submitAnswerRef = useRef<(text: string) => void>(() => {});
 
+  // CHANGED: include user_id in every chat request body
   const submitAnswer = useCallback(async (answerText: string) => {
     if (!answerText.trim() || isLoading || isCompleteRef.current) return;
 
@@ -109,7 +118,6 @@ export default function MockInterviewStudio() {
     setInput('');
     setIsLoading(true);
 
-    // FIX: Explicitly build the history including the current answer to send to API
     const currentHistory = [...messages, { role: 'user', text: userText }];
     setMessages(currentHistory);
 
@@ -126,11 +134,11 @@ export default function MockInterviewStudio() {
           messages:      apiHistory,
           topic_context: topicFromUrl,
           syllabus:      syllabusFromUrl,
+          user_id:       userId,            // ← NEW
         }),
       });
 
       const data = await response.json();
-
       if (isCompleteRef.current) return;
 
       setMessages(prev => [...prev, { role: 'ai', text: data.text }]);
@@ -153,12 +161,11 @@ export default function MockInterviewStudio() {
     } finally {
       setIsLoading(false);
     }
-  // Added messages to dependency array to prevent stale closures
-  }, [isLoading, topicFromUrl, syllabusFromUrl, messages]);
+  }, [isLoading, topicFromUrl, syllabusFromUrl, messages, userId]);
 
   useEffect(() => { submitAnswerRef.current = submitAnswer; }, [submitAnswer]);
 
-  // ─── SPEECH RECOGNITION ───────────────────────────────────────────────────
+  // ── SPEECH RECOGNITION ────────────────────────────────────────────────
   const startListeningInternal = useCallback(() => {
     if (isCompleteRef.current) return;
 
@@ -196,7 +203,7 @@ export default function MockInterviewStudio() {
     try { recognition.start(); } catch (_) {}
   }, []);
 
-  // ─── SPEAK ────────────────────────────────────────────────────────────────
+  // ── SPEAK ─────────────────────────────────────────────────────────────
   const startListeningRef = useRef(startListeningInternal);
   useEffect(() => { startListeningRef.current = startListeningInternal; }, [startListeningInternal]);
 
@@ -211,9 +218,7 @@ export default function MockInterviewStudio() {
     utterance.onend = () => {
       setIsSpeaking(false);
       if (isCompleteRef.current) return;
-      if (autoListen) {
-        setTimeout(() => startListeningRef.current(), 350);
-      }
+      if (autoListen) setTimeout(() => startListeningRef.current(), 350);
     };
 
     utterance.onerror = () => setIsSpeaking(false);
@@ -251,8 +256,8 @@ export default function MockInterviewStudio() {
     recorder.ondataavailable = e => chunksRef.current.push(e.data);
     recorder.onstop = () => {
       const blob = new Blob(chunksRef.current, { type: 'video/webm' });
-      const a     = document.createElement('a');
-      a.href      = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = URL.createObjectURL(blob);
       a.download = `exam-session-q${qNum}.webm`;
       a.click();
     };
@@ -260,7 +265,7 @@ export default function MockInterviewStudio() {
     mediaRecorderRef.current = recorder;
   };
 
-  // ─── START ASSESSMENT ─────────────────────────────────────────────────────
+  // CHANGED: include user_id in the initial chat request too
   const startAssessment = async () => {
     setSessionStarted(true);
     setIsLoading(true);
@@ -274,10 +279,10 @@ export default function MockInterviewStudio() {
           messages:      [],
           topic_context: topicFromUrl,
           syllabus:      syllabusFromUrl,
+          user_id:       userId,            // ← NEW
         }),
       });
       const data = await response.json();
-      // Update state so the history actually exists for the first answer
       setMessages([{ role: 'ai', text: data.text }]);
       speak(data.text, true);
     } catch (err) {
@@ -301,10 +306,10 @@ export default function MockInterviewStudio() {
   const progress = (displayQ / TOTAL_QUESTIONS) * 100;
 
   const statusLabel = !sessionStarted     ? 'Waiting to start...'
-    : isSpeaking                         ? '🔊 Speaking — listen carefully...'
-    : isListening                        ? '🎙️ Listening — answer now...'
-    : isLoading                          ? 'Thinking...'
-    :                                      'Proctored certification in progress.';
+    : isSpeaking                          ? '🔊 Speaking — listen carefully...'
+    : isListening                         ? '🎙️ Listening — answer now...'
+    : isLoading                           ? 'Thinking...'
+    :                                       'Proctored certification in progress.';
 
   return (
     <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
@@ -397,7 +402,7 @@ export default function MockInterviewStudio() {
             {!isCameraOn && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-6">
                 <div className={`w-24 h-24 rounded-full mb-6 flex items-center justify-center transition-all duration-500 ${
-                  isSpeaking  ? 'bg-indigo-400 animate-pulse scale-110 shadow-2xl shadow-indigo-500/50'
+                  isSpeaking   ? 'bg-indigo-400 animate-pulse scale-110 shadow-2xl shadow-indigo-500/50'
                   : isListening ? 'bg-emerald-500 animate-pulse scale-105 shadow-2xl shadow-emerald-500/50'
                   : isLoading   ? 'bg-indigo-600 animate-pulse'
                   :               'bg-indigo-600 shadow-2xl shadow-indigo-500/30'
