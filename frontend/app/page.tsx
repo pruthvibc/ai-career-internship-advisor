@@ -8,7 +8,8 @@ import {
   Briefcase,
   CheckCircle2, Loader2,
   Sparkles, BookOpen, Lightbulb,
-  Youtube, GraduationCap, Clock, ExternalLink, LogOut
+  Youtube, GraduationCap, Clock, ExternalLink, LogOut,
+  UserCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -172,6 +173,7 @@ export default function CareerCommandCenter() {
           <SidebarItem href="/resume-evolution"    icon={<FileText />}       label="Resume Evolution"      />
           <SidebarItem href="/skill-gap-analysis"  icon={<Target />}         label="Skill Gap Analysis"    />
           <SidebarItem href="/job-recommendations" icon={<Briefcase />}      label="Job Recommendations"   />
+          <SidebarItem href="/self_intro"          icon={<UserCircle />}      label="Self Introduction Coach"   />
         </nav>
 
         <button

@@ -1065,6 +1065,202 @@ def health_check():
     return {"status": "Backend Active"}
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SELF-INTRODUCTION COACH  — add this block to your main.py
+# ─────────────────────────────────────────────────────────────────────────────
+
+from pydantic import BaseModel
+from typing import Optional
+
+class SelfIntroRequest(BaseModel):
+    intro_text: str
+    user_id: Optional[str] = None
+    target_role: Optional[str] = None   # pulled from job recommendations if available
+
+
+@app.post("/api/analyze-intro")
+async def analyze_self_intro(request: SelfIntroRequest):
+    """
+    Analyzes a candidate's self-introduction and returns:
+    - Effectiveness score (0-100)
+    - Sub-scores: clarity, relevance, impact, professionalism
+    - Mistake list with labels and categories
+    - AI-improved version of the intro
+    - Personalized tips based on resume data (if user_id provided)
+    - What-to-include checklist status
+    """
+    try:
+        intro_text = request.intro_text.strip()
+        if not intro_text or len(intro_text) < 20:
+            return {"error": "Please provide a meaningful self-introduction (at least a few sentences)."}
+
+        # ── Pull user resume context for personalization ──────────────────────
+        resume_context = ""
+        candidate_name = "Candidate"
+        target_role = request.target_role or "Software Engineering / Tech"
+
+        if request.user_id:
+            user = load_user(request.user_id)
+            if user:
+                candidate_name = user.get("name", "Candidate")
+                resume_summary = user.get("resume_summary", "")
+                verified_skills = user.get("verified_skills", [])
+                gaps = user.get("gaps", [])
+                if resume_summary:
+                    resume_context = f"""
+CANDIDATE PROFILE (from uploaded resume):
+- Name: {candidate_name}
+- Resume Summary: {resume_summary[:600]}
+- Verified Skills: {', '.join(verified_skills) if verified_skills else 'None yet'}
+- Known Gaps: {', '.join(gaps[:5]) if gaps else 'None identified'}
+"""
+
+        prompt = f"""
+You are an elite placement coach at a top engineering college in India. Your job is to give BRUTAL, HONEST, and HIGHLY SPECIFIC feedback on a student's self-introduction for tech internship/job interviews.
+
+{resume_context}
+TARGET ROLE: {target_role}
+
+SELF-INTRODUCTION TO ANALYZE:
+\"\"\"{intro_text}\"\"\"
+
+ANALYZE DEEPLY and return ONLY a valid JSON object with this EXACT structure (no markdown, no explanation):
+
+{{
+  "effectiveness_score": <integer 0-100>,
+  "sub_scores": {{
+    "clarity": <integer 1-10>,
+    "relevance": <integer 1-10>,
+    "impact": <integer 1-10>,
+    "professionalism": <integer 1-10>
+  }},
+  "estimated_duration_seconds": <integer, estimated spoken time>,
+  "mistakes": [
+    {{
+      "text": "<exact phrase from their intro that is problematic>",
+      "issue": "<short issue label like 'Grammar Error', 'Irrelevant Info', 'Generic Claim', 'Poor Ending', 'No Evidence', 'Filler Words', 'Family History', 'Robotic Tone', 'Exaggeration'>",
+      "severity": "<'high' | 'medium' | 'low'>",
+      "fix": "<one-line actionable fix>"
+    }}
+  ],
+  "key_issue": "<2 sentences: the single most important thing holding this intro back>",
+  "what_included": {{
+    "name_and_academic": <true/false>,
+    "core_technical_skills": <true/false>,
+    "impactful_projects": <true/false>,
+    "experience_highlights": <true/false>,
+    "key_strengths_with_proof": <true/false>,
+    "career_goal": <true/false>
+  }},
+  "improved_intro": "<A completely rewritten, placement-ready self-introduction. MUST include: full name + semester + college, 1-2 specific projects with metrics (invent plausible metrics if none given), technical skills relevant to {target_role}, a clear career goal statement aligned to the role. Keep it 45-60 seconds when spoken. Make it sound natural and confident, NOT robotic.>",
+  "improvement_highlights": [
+    "<specific improvement made, starting with action verb like 'Added', 'Removed', 'Replaced', 'Quantified'>",
+    "<another improvement>",
+    "<another improvement>"
+  ],
+  "improved_skills_shown": ["<skill1>", "<skill2>", "<skill3>", "<skill4>", "<skill5>", "<skill6>"],
+  "personalized_tips": [
+    "<tip specifically tailored to THIS candidate's profile and gaps>",
+    "<another personalized tip>",
+    "<another personalized tip>"
+  ],
+  "readiness_verdict": "<'Not Ready', 'Needs Work', 'Almost There', or 'Interview Ready'>",
+  "readiness_color": "<'red', 'orange', 'yellow', or 'green'>"
+}}
+
+CRITICAL RULES:
+- mistakes array must have 2-6 items minimum. Find real issues. Don't be kind.
+- improved_intro must be dramatically better — specific names, numbers, metrics.
+- personalized_tips must reference their ACTUAL gaps/skills if resume context is provided.
+- If the intro starts with "Myself" flag it as Grammar Error severity: high.
+- If the intro mentions parents/family, flag it as Irrelevant Info severity: high.
+- effectiveness_score: 0-40 = bad, 41-65 = average, 66-80 = good, 81-100 = excellent.
+"""
+
+        completion = groq_client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "You are a strict placement coach. Return only valid JSON. No markdown fences."},
+                {"role": "user", "content": prompt}
+            ],
+            model="llama-3.3-70b-versatile",
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+
+        result = json.loads(completion.choices[0].message.content)
+
+        # ── Ensure sub_scores always exists with defaults ──────────────────
+        if "sub_scores" not in result or not isinstance(result.get("sub_scores"), dict):
+            result["sub_scores"] = {"clarity": 5, "relevance": 5, "impact": 5, "professionalism": 5}
+        else:
+            for key in ["clarity", "relevance", "impact", "professionalism"]:
+                result["sub_scores"].setdefault(key, 5)
+
+        # ── Persist intro score to user record ────────────────────────────────
+        if request.user_id:
+            try:
+                user = load_user(request.user_id)
+                if user:
+                    user["last_intro_score"] = result.get("effectiveness_score", 0)
+                    user["last_intro_verdict"] = result.get("readiness_verdict", "")
+                    save_user(request.user_id, user)
+            except Exception as e:
+                print(f"Intro score save error (non-fatal): {e}")
+
+        return result
+
+    except json.JSONDecodeError as e:
+        return {"error": f"AI response parse error: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Analysis failed: {str(e)}"}
+
+
+@app.post("/api/regenerate-intro")
+async def regenerate_intro(request: SelfIntroRequest):
+    """
+    Given feedback context, regenerates an improved intro with different phrasing.
+    Useful for the 'Try Again' flow on the frontend.
+    """
+    try:
+        resume_context = ""
+        candidate_name = "Candidate"
+        target_role = request.target_role or "Software Engineering"
+
+        if request.user_id:
+            user = load_user(request.user_id)
+            if user:
+                candidate_name = user.get("name", "Candidate")
+                resume_context = f"Resume snippet: {user.get('resume_summary', '')[:400]}"
+                target_role = target_role or "Software Engineering"
+
+        prompt = f"""
+You are a placement coach. Rewrite this self-introduction to be placement-ready for a {target_role} role.
+{resume_context}
+
+ORIGINAL:
+\"\"\"{request.intro_text}\"\"\"
+
+Rules:
+- 45-60 seconds when spoken (~120-150 words)
+- Start with "Hi, I'm [name]"
+- Include: name, college, semester, 1-2 projects with metrics, 2-3 tech skills, career goal
+- Natural, confident tone — not robotic
+- End with why you're excited about THIS type of role
+
+Return ONLY JSON: {{"improved_intro": "...", "word_count": <int>}}
+"""
+        comp = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            response_format={"type": "json_object"},
+            temperature=0.7,
+        )
+        return json.loads(comp.choices[0].message.content)
+    except Exception as e:
+        return {"error": str(e)}
+    
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
