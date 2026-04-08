@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { BrainCircuit, Loader2, ArrowRight, Sparkles, User, Lock, Eye, EyeOff } from 'lucide-react';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 type Mode = 'login' | 'signup';
 type Status = 'idle' | 'success_returning' | 'success_new';
 
@@ -49,7 +51,7 @@ export default function LoginPage() {
 
     try {
       const endpoint = mode === 'login' ? '/api/login' : '/api/signup';
-      const res  = await fetch(`http://localhost:8000${endpoint}`, {
+      const res  = await fetch(`${API_BASE}${endpoint}`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ username: u, password: p }),

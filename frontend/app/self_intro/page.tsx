@@ -13,6 +13,9 @@ import {
   Trophy, BarChart3, Copy, Check
 } from 'lucide-react';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+
 // ── Types ────────────────────────────────────────────────────────────────────
 interface SubScores { clarity: number; relevance: number; impact: number; professionalism: number }
 interface Mistake { text: string; issue: string; severity: 'high' | 'medium' | 'low'; fix: string }
@@ -192,7 +195,7 @@ export default function SelfIntroCoach() {
     setIsAnalyzing(true);
     setResult(null);
     try {
-      const res = await fetch('http://localhost:8000/api/analyze-intro', {
+      const res = await fetch('${API_BASE}/api/analyze-intro', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -218,7 +221,7 @@ export default function SelfIntroCoach() {
     if (!result) return;
     setIsRegenerating(true);
     try {
-      const res = await fetch('http://localhost:8000/api/regenerate-intro', {
+      const res = await fetch('${API_BASE}/api/regenerate-intro', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

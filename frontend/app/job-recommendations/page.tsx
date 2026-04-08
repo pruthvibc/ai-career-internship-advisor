@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 interface Job {
   title: string;
   company: string;
@@ -59,7 +61,7 @@ export default function CareerCommandCenter() {
     formData.append('session_id', sessionId);   // ← pass session_id
 
     try {
-      const res  = await fetch('http://localhost:8000/api/upload-resume', {
+      const res  = await fetch(`${API_BASE}/api/upload-resume`, {
         method: 'POST',
         body: formData,
       });
@@ -92,7 +94,7 @@ export default function CareerCommandCenter() {
 
     try {
       const res  = await fetch(
-        `http://localhost:8000/api/search-jobs?session_id=${sessionId}`
+        `${API_BASE}/api/search-jobs?session_id=${sessionId}`
       );
       const data = await res.json();
 
@@ -112,7 +114,7 @@ export default function CareerCommandCenter() {
     setAnalysis('loading');
 
     try {
-      const res  = await fetch('http://localhost:8000/api/match-job', {
+      const res  = await fetch(`${API_BASE}/api/match-job`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

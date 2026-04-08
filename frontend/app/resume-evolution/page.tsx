@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface ExperienceEntry {
   title: string;
@@ -71,7 +73,7 @@ export default function ResumeEvolution() {
   // CHANGED: pass user_id to /api/hindsight to get only THIS user's verified skills
   useEffect(() => {
     if (!userId) return;
-    fetch(`http://localhost:8000/api/hindsight?user_id=${encodeURIComponent(userId)}`)
+    fetch(`${API_BASE}/api/hindsight?user_id=${encodeURIComponent(userId)}`)
       .then(r => r.json())
       .then(d => setMemories(d.memories || []))
       .catch(() => {});
@@ -97,7 +99,7 @@ export default function ResumeEvolution() {
     formData.append('user_id', userId);       // ← NEW
 
     try {
-      const res = await fetch('http://localhost:8000/api/evolve-resume', {
+      const res = await fetch('${API_BASE}/api/evolve-resume', {
         method: 'POST',
         body:   formData,
       });
@@ -121,7 +123,7 @@ export default function ResumeEvolution() {
     setIsGeneratingDocx(true);
 
     try {
-      const res = await fetch('http://localhost:8000/api/generate-resume-docx', {
+      const res = await fetch('${API_BASE}/api/generate-resume-docx', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ resume_data: resumeData }),
